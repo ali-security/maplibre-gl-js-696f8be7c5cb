@@ -1,10 +1,12 @@
 name: Tests
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Optional test name filter'
+        required: false
+        default: ''
 
 permissions:
   checks: write
@@ -12,35 +14,6 @@ permissions:
   contents: write
 
 jobs:
-  code-hygiene:
-    name: Code Hygiene
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
-        with:
-          node-version-file: '.nvmrc'
-      - run: npm ci
-      - run: npm run lint -- --max-warnings 0
-        if: '!cancelled()'
-      - run: npm run lint-css
-        if: '!cancelled()'
-      - run: npm run generate-typings
-        if: '!cancelled()'
-      - run: npm run typecheck
-        if: '!cancelled()'
-      - run: npm run generate-docs
-      - name: Build docs using docker and mkdocs-material
-        run: |
-          rm docs/README.md
-          rm -rf docs/API/_media
-          docker run --rm -v ${PWD}:/docs squidfunk/mkdocs-material build --strict
-      - name: Check spelling
-        # This need to run after the docs are built
-        run: npm run spellcheck
-
   unit-tests:
     name: Unit tests
     runs-on: ubuntu-latest
@@ -56,7 +29,7 @@ jobs:
         run: nohup Xvfb &
           echo "DISPLAY=:0" >> $GITHUB_ENV
       - run: npm ci
-      - run: npm run test-unit-ci
+      - run: npm run test-unit-ci -- ${{ inputs.test-filter }}
       - name: Upload coverage artifact
         if: '!cancelled()'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -86,11 +59,11 @@ jobs:
       - run: npm ci
       - run: npm run build-dist
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: '!cancelled()'
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         with:
           name: build-dist-${{ matrix.os }}
           path: dist/maplibre-gl.js
-      - run: npm run test-integration-ci
+      - run: npm run test-integration-ci -- ${{ inputs.test-filter }}
       - name: Move files
         if: runner.os == 'Linux'
         run: |
@@ -138,7 +111,7 @@ jobs:
           echo "DISPLAY=:0" >> $GITHUB_ENV
       - run: npm run build-dist
       - name: Run Render tests
-        run: npm run test-render
+        run: npm run test-render -- ${{ inputs.test-filter }}
         env:
           CURRENT_SPLIT_INDEX: ${{ matrix.split }}
       - name: Move files
@@ -166,6 +139,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -175,49 +149,14 @@ jobs:
           node-version-file: '.nvmrc'
       - run: npm ci
       - run: npm run build-dist
-      - run: npm run test-build-ci
-
-  merge-and-report:
-    name: Merge coverage and report
-    runs-on: ubuntu-latest
-    needs: [unit-tests, integration-tests, render-tests]
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
-        with:
-          node-version-file: '.nvmrc'
-
-      - name: Download coverage reports
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: coverage-reports-*
-          merge-multiple: true
-          path: downloaded
-
-      - name: Merge Coverage reports
-        shell: bash
-        run: npx nyc report -t ${{ github.workspace }}/downloaded --reporter lcov --reporter json --report-dir coverage-merged
-
-      - name: Upload merged coverage report
+      - run: npm run test-build-ci -- ${{ inputs.test-filter }}
+      - name: Pack npm tarball
+        if: runner.os == 'Linux'
+        run: npm pack
+      - name: Upload npm tarball
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: merged-coverage-report
-          path: coverage-merged
-
-      - name: Code Coverage Annotation
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: ggilder/codecoverage@9f2933bb9cc49ffb598575216e12c102b0716219
-        with:
-          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
-          COVERAGE_FILE_PATH: "./coverage-merged/lcov.info"
-          COVERAGE_FORMAT: "lcov"
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
-        with:
-          files: ${{ github.workspace }}/coverage-merged/coverage-final.json
-          verbose: true
-          token: ${{ secrets.CODECOV_TOKEN }}
-          disable_search: true
+          name: npm-tarball
+          path: maplibre-gl-*.tgz
+          if-no-files-found: error

@@ -6,8 +6,6 @@ permissions:
   attestations: write
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -21,6 +19,7 @@ jobs:
   get_tag:
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       latest_tag: ${{ steps.set-tag.outputs.tag }}
     steps:
